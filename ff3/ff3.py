@@ -33,8 +33,8 @@ TWEAK_LEN = 8  # Original FF3 tweak length
 TWEAK_LEN_NEW = 7  # FF3-1 tweak length
 HALF_TWEAK_LEN = TWEAK_LEN // 2
 BASE62 = string.digits + string.ascii_lowercase + string.ascii_uppercase
-DEFAULT_ALPHABET = BASE62
-RADIX_MAX = 2 ** 16
+STANDARD_ALPHABET = BASE62
+RADIX_MAX = 256            # Support 8-bit alphabets for now, requires test cases for larger values
 
 NoneType = type(None)
 
@@ -72,21 +72,18 @@ know two of the arguments.
 class FF3Cipher:
     """Class FF3Cipher implements the FF3 format-preserving encryption algorithm.
 
-    Both radix and alphabet have default value `None` which means unspecified.
-
-    If both are unspecified, the standard base 10 digits are used.
-
     If a value of radix between 2 and 62 is specified, then that many characters
     from the base 62 alphabet (digits + lowercase + uppercase latin) are used.
     """
-    def __init__(self, key, tweak, radix=None, alphabet=None):
 
-        radix, alphabet = validate_radix_and_alphabet(radix, alphabet)
-
+    def __init__(self, key, tweak, radix=10, ):
         keybytes = bytes.fromhex(key)
         self.tweak = tweak
         self.radix = radix
-        self.alphabet = alphabet
+        if radix <= len(STANDARD_ALPHABET):
+            self.alphabet = STANDARD_ALPHABET[0:radix]
+        else:
+            self.alphabet = None
 
         # Calculate range of supported message lengths [minLen..maxLen]
         self.minLen, self.maxLen = minlen_and_maxlen(radix)
@@ -200,17 +197,21 @@ class FF3Cipher:
         B = plaintext[u:]
 
         if len(tweakBytes) == TWEAK_LEN:
+            # FF3
             # Split the tweak
             Tl = tweakBytes[:HALF_TWEAK_LEN]
             Tr = tweakBytes[HALF_TWEAK_LEN:]
         elif len(tweakBytes) == TWEAK_LEN_NEW:
+            # FF3-1
+            # The tweak is partitioned into a 32-bit left tweak and a 32-bit right tweak
             # Tl is T[0..27] + 0000
             Tl = bytearray(tweakBytes[:4])
             Tl[3] &= 0xF0
 
             # Tr is T[32..55] + T[28..31] + 0000
-            Tr = bytearray((int(tweakBytes[4:].hex(), 16) << 4).to_bytes(4, 'big'))
-            Tr[3] = tweakBytes[6] << 4 & 0xF0
+            Tr = bytearray(tweakBytes[4:])
+            Tr.append((tweakBytes[3]&0x0F)<<4)
+            print(f"Tweak:{tweakBytes.hex()} Tl:{Tl.hex()}, Tr:{Tr.hex()}")
         else:
             raise ValueError(f"tweak length {len(tweakBytes)} invalid: tweak must be 56 or 64 bits")
 
@@ -260,7 +261,7 @@ class FF3Cipher:
                 c = c % modV
 
             # logging.debug(f"m: {m} A: {A} c: {c} y: {y}")
-            C = encode_int_r(c, self.radix, self.alphabet, int(m))
+            C = encode_int_r(c, self.alphabet, int(m))
 
             # Final steps
             A = B
@@ -310,13 +311,17 @@ class FF3Cipher:
             Tl = tweakBytes[:HALF_TWEAK_LEN]
             Tr = tweakBytes[HALF_TWEAK_LEN:]
         elif len(tweakBytes) == TWEAK_LEN_NEW:
+            # FF3-1
+            # The tweak is partitioned into a 32-bit left tweak and a 32-bit right tweak
             # Tl is T[0..27] + 0000
             Tl = bytearray(tweakBytes[:4])
             Tl[3] &= 0xF0
 
             # Tr is T[32..55] + T[28..31] + 0000
-            Tr = bytearray((int(tweakBytes[4:].hex(), 16) << 4).to_bytes(4, 'big'))
-            Tr[3] = tweakBytes[6] << 4 & 0xF0
+            Tr = bytearray(tweakBytes[4:])
+            Tr.append((tweakBytes[3]&0x0F)<<4)
+            print(f"Tweak:{tweakBytes.hex()} Tl:{Tl.hex()}, Tr:{Tr.hex()}")
+
         else:
             raise ValueError(f"tweak length {len(tweakBytes)} invalid: tweak must be 56 or 64 bits")
 
@@ -364,7 +369,7 @@ class FF3Cipher:
                 c = c % modV
 
             # logging.debug(f"m: {m} B: {B} c: {c} y: {y}")
-            C = encode_int_r(c, self.radix, self.alphabet, int(m))
+            C = encode_int_r(c, self.alphabet, int(m))
 
             # Final steps
             B = A
@@ -375,7 +380,7 @@ class FF3Cipher:
         return A + B
 
 
-def encode_int_r(n, base, alphabet, length=0):
+def encode_int_r(n, alphabet, length=0):
     """
     Return a string representation of a number in the given base system for 2..62
 
@@ -389,7 +394,9 @@ def encode_int_r(n, base, alphabet, length=0):
        encode_int(32, base=16)
         '20'
     """
-    base, alphabet = validate_radix_and_alphabet(base, alphabet)
+    base = len(alphabet)
+    if (base > RADIX_MAX):
+        raise ValueError(f"Base {base} is outside range of supported radix 2..{RADIX_MAX}")
 
     x = ''
     while n >= base:
@@ -461,12 +468,12 @@ def validate_radix_and_alphabet(radix, alphabet):
         if radix is None:
             radix = 10
         # Use characters from the default alphabet.
-        if radix > len(DEFAULT_ALPHABET):
+        if radix > len(STANDARD_ALPHABET):
             raise ValueError(
-                f"For radix >{len(DEFAULT_ALPHABET)} "
+                f"For radix >{len(STANDARD_ALPHABET)} "
                 f"please specify a custom alphabet."
             )
-        alphabet = DEFAULT_ALPHABET[:radix]
+        alphabet = STANDARD_ALPHABET[:radix]
     # alphabet is now defined. The radix might not be.
 
     if len(alphabet) != len(set(alphabet)):
